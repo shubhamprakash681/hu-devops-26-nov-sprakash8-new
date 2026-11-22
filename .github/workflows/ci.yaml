@@ -1,0 +1,157 @@
+name: Container CI
+
+on:
+  push:
+    paths:
+      - 'app/fe/**'
+      - 'app/be/**'
+      - '.github/workflows/ci.yaml'
+      - '.github/filters.yaml'
+  pull_request:
+    paths:
+      - 'app/fe/**'
+      - 'app/be/**'
+      - '.github/workflows/ci.yaml'
+      - '.github/filters.yaml'
+
+# Repository variables may override these defaults without a workflow edit.
+# IMAGE_PREFIX is intentionally a lower-case GHCR package prefix.
+env:
+  RUNNER: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
+  REGISTRY: ${{ vars.CONTAINER_REGISTRY || 'ghcr.io' }}
+  NODE_VERSION: ${{ vars.NODE_VERSION || '20.19.0' }}
+  IMAGE_PREFIX: ${{ vars.IMAGE_PREFIX || 'hu-inventory' }}
+  TRIVY_VERSION: ${{ vars.TRIVY_VERSION || '0.57.1' }}
+  TRIVY_SEVERITY: ${{ vars.TRIVY_SEVERITY || 'HIGH,CRITICAL' }}
+  REPORT_RETENTION_DAYS: ${{ vars.REPORT_RETENTION_DAYS || '30' }}
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  changes:
+    name: Detect changed components
+    runs-on: ${{ env.RUNNER }}
+    outputs:
+      frontend: ${{ steps.filter.outputs.frontend }}
+      backend: ${{ steps.filter.outputs.backend }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@v4.2.2
+      - id: filter
+        uses: dorny/paths-filter@v3.0.2
+        with:
+          filters: .github/filters.yaml
+      - id: matrix
+        name: Create a matrix for changed components
+        shell: bash
+        env:
+          FRONTEND_CHANGED: ${{ steps.filter.outputs.frontend }}
+          BACKEND_CHANGED: ${{ steps.filter.outputs.backend }}
+        run: |
+          entries=()
+          if [[ "$FRONTEND_CHANGED" == 'true' ]]; then
+            entries+=('{"component":"frontend","context":"app/fe","image_suffix":"frontend"}')
+          fi
+          if [[ "$BACKEND_CHANGED" == 'true' ]]; then
+            entries+=('{"component":"backend","context":"app/be","image_suffix":"backend"}')
+          fi
+          joined=$(IFS=,; echo "${entries[*]}")
+          echo "matrix={\"include\":[${joined}]}" >> "$GITHUB_OUTPUT"
+
+  verify-build-scan-publish:
+    name: ${{ matrix.component }} | verify, build, scan, publish
+    needs: changes
+    runs-on: ${{ env.RUNNER }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4.2.2
+
+      - name: Set up Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: ${{ matrix.context }}/package-lock.json
+
+      - name: Install locked dependencies
+        working-directory: ${{ matrix.context }}
+        run: npm ci
+
+      - name: Lint
+        working-directory: ${{ matrix.context }}
+        run: npm run lint
+
+      - name: Test
+        working-directory: ${{ matrix.context }}
+        run: npm test
+
+      - name: Build application
+        working-directory: ${{ matrix.context }}
+        run: npm run build
+
+      - name: Define immutable image tag
+        id: image
+        shell: bash
+        run: |
+          image="${REGISTRY}/${GITHUB_REPOSITORY_OWNER,,}/${IMAGE_PREFIX}-${{ matrix.image_suffix }}:${GITHUB_SHA}"
+          printf 'tag=%s\n' "$image" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "$image" > "${{ matrix.context }}/image-reference.txt"
+
+      - name: Build image tagged with the commit SHA
+        uses: docker/build-push-action@v6.18.0
+        with:
+          context: ${{ matrix.context }}
+          push: false
+          load: true
+          tags: ${{ steps.image.outputs.tag }}
+
+      - name: Scan the just-built image
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ steps.image.outputs.tag }}
+          scan-type: image
+          format: json
+          output: ${{ matrix.context }}/trivy-image.json
+          severity: ${{ env.TRIVY_SEVERITY }}
+          exit-code: '1'
+          ignore-unfixed: false
+          trivy-version: ${{ env.TRIVY_VERSION }}
+
+      # A PR verifies all gates but never receives a registry credential or push.
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v3.4.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # This pushes precisely the local image that passed the preceding scan.
+      - name: Push verified image to GHCR
+        if: github.event_name == 'push'
+        run: docker push '${{ steps.image.outputs.tag }}'
+
+      - name: Record published image
+        if: github.event_name == 'push'
+        shell: bash
+        run: |
+          {
+            echo "## Published ${{ matrix.component }} image"
+            echo
+            echo "- \`${{ steps.image.outputs.tag }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish scan report and image record
+        if: always()
+        uses: actions/upload-artifact@v4.6.2
+        with:
+          name: ${{ matrix.component }}-ci-reports-${{ github.sha }}
+          path: |
+            ${{ matrix.context }}/trivy-image.json
+            ${{ matrix.context }}/image-reference.txt
+          if-no-files-found: warn
+          retention-days: ${{ env.REPORT_RETENTION_DAYS }}

@@ -1,0 +1,11 @@
+# Paths that affect each independently published image. Changes to the CI
+# definition are deliberately included in both filters because they affect both
+# release paths.
+frontend:
+  - 'app/fe/**'
+  - '.github/workflows/ci.yaml'
+  - '.github/filters.yaml'
+backend:
+  - 'app/be/**'
+  - '.github/workflows/ci.yaml'
+  - '.github/filters.yaml'

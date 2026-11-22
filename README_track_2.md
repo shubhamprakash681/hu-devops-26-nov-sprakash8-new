@@ -98,3 +98,88 @@ This document lists the steps followed for each task. The screenshot for each ta
 | myapp-backend | 1.0 | `<fill in>` |
 | myapp-frontend | 1.0 | `<fill in>` |
 | postgres | 16-alpine | `<fill in>` |
+
+---
+
+## Question 2: Continuous Integration (GitHub Actions)
+
+The CI workflow is [`.github/workflows/ci.yaml`](.github/workflows/ci.yaml).
+It is intentionally one workflow with a changed-path detection job and a matrix
+job, so a frontend-only change processes only the frontend and a backend-only
+change processes only the backend. A change to the CI definition processes both.
+
+### Trigger and component scope
+
+The workflow runs for `push` and `pull_request` events affecting `app/fe/**`,
+`app/be/**`, or the CI configuration. [`dorny/paths-filter@v3.0.2`](https://github.com/dorny/paths-filter)
+uses [`.github/filters.yaml`](.github/filters.yaml) to select the component.
+
+### Pipeline sequence
+
+For every selected component the required stages run in this order:
+
+1. `npm ci` installs the committed lockfile.
+2. `npm run lint` and `npm test` fail the job on a lint or test error.
+3. `npm run build` creates the application build.
+4. Docker builds a local image identified by the full commit SHA.
+5. Trivy scans that exact local tag. A High or Critical finding fails the job.
+6. Only on a `push`, and only after every preceding command succeeds, the
+   already-scanned local image is logged in and pushed to GHCR.
+7. Trivy JSON and the image reference are published as a run artifact, even for
+   a failed scan, so the finding can be reviewed.
+
+There is no `continue-on-error`, scanner ignore file, swallowed exit code, or
+`latest` tag. Pull requests run every validation gate but cannot publish.
+
+### Parameters and pinned tooling
+
+All operational values are declared once at workflow scope and can be
+overridden with GitHub repository variables: `CI_RUNNER`,
+`CONTAINER_REGISTRY`, `NODE_VERSION`, `IMAGE_PREFIX`, `TRIVY_VERSION`,
+`TRIVY_SEVERITY`, and `REPORT_RETENTION_DAYS`. The checked-in defaults are
+`ubuntu-24.04`, GHCR, Node `20.19.0`, the `hu-inventory` image prefix, Trivy
+`0.57.1`, `HIGH,CRITICAL`, and 30 days.
+The workflow pins all action/tool releases used by this question:
+
+| Purpose | Pinned version |
+|---|---|
+| Runner | `ubuntu-24.04` |
+| Node.js | `20.19.0` |
+| `actions/checkout` | `v4.2.2` |
+| `dorny/paths-filter` | `v3.0.2` |
+| `actions/setup-node` | `v4.4.0` |
+| Docker build/push action | `v6.18.0` |
+| Trivy action / engine | `v0.28.0` / `0.57.1` |
+| Docker login action | `v3.4.0` |
+| Artifact upload action | `v4.6.2` |
+
+### GHCR tagging and publication record
+
+The standard release tag is the immutable, full Git commit SHA:
+
+| Component | GHCR image and tag |
+|---|---|
+| Frontend | `ghcr.io/<repository-owner>/hu-inventory-frontend:<commit-sha>` |
+| Backend | `ghcr.io/<repository-owner>/hu-inventory-backend:<commit-sha>` |
+
+The owner is converted to lower case because GHCR package paths require it.
+After each successful push, the exact image/tag is recorded in the GitHub
+Actions job summary and in the `*-ci-reports-<commit-sha>` artifact as
+`image-reference.txt`; this is the run-specific record of the GHCR images
+actually stored. Repository settings must allow `GITHUB_TOKEN` to write
+packages for the target repository.
+
+### Local validation
+
+The workflow commands were verified in an isolated `node:20.19.0-alpine`
+container with the repository mounted read-only:
+
+| Component | Lint | Tests | Build |
+|---|---:|---:|---:|
+| Backend | Passed | 15 passed | Passed |
+| Frontend | Passed | 2 passed | Passed |
+
+The GitHub Actions workflow has not been run from this local workspace, so no
+GHCR image is claimed as published here. On the first qualifying repository
+push, the job summary and its report artifact provide the authoritative stored
+image/tag record described above.

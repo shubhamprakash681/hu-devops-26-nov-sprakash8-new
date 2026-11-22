@@ -4,8 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "lint": "node --check vite.config.js && node --check src/api.js && node --check test/api.test.js",
     "dev": "vite",
     "build": "vite build",
+    "test": "node --test test/",
     "preview": "vite preview"
   },
   "dependencies": {
