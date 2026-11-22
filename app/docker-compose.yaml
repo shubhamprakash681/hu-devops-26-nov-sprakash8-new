@@ -1,0 +1,44 @@
+services:
+  frontend:
+    build:
+      context: ./fe
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ""
+    container_name: react-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: always
+
+  backend:
+    build:
+      context: ./be
+      dockerfile: Dockerfile
+    container_name: node-backend
+    env_file:
+      - ./be/.env
+    environment:
+      DB_HOST: db        # service name, not localhost
+    ports:
+      - "8080:8080"    # match the PORT in be/.env
+    depends_on:
+      - db
+    restart: always
+
+  db:
+    image: postgres:15
+    container_name: postgres-db
+    environment:
+      POSTGRES_USER: hu_user
+      POSTGRES_PASSWORD: adminuser@123
+      POSTGRES_DB: hudb
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    restart: always
+
+volumes:
+  pgdata:
