@@ -139,6 +139,8 @@ overridden with GitHub repository variables: `CI_RUNNER`,
 `TRIVY_SEVERITY`, and `REPORT_RETENTION_DAYS`. The checked-in defaults are
 `ubuntu-24.04`, GHCR, Node `20.19.0`, the `hu-inventory` image prefix, Trivy
 `0.57.1`, `HIGH,CRITICAL`, and 30 days.
+`CI_RUNNER` is referenced directly in each job's `runs-on` field because
+GitHub Actions does not allow the `env` context in that field.
 The workflow pins all action/tool releases used by this question:
 
 | Purpose | Pinned version |

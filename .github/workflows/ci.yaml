@@ -17,7 +17,6 @@ on:
 # Repository variables may override these defaults without a workflow edit.
 # IMAGE_PREFIX is intentionally a lower-case GHCR package prefix.
 env:
-  RUNNER: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
   REGISTRY: ${{ vars.CONTAINER_REGISTRY || 'ghcr.io' }}
   NODE_VERSION: ${{ vars.NODE_VERSION || '20.19.0' }}
   IMAGE_PREFIX: ${{ vars.IMAGE_PREFIX || 'hu-inventory' }}
@@ -32,7 +31,7 @@ permissions:
 jobs:
   changes:
     name: Detect changed components
-    runs-on: ${{ env.RUNNER }}
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
     outputs:
       frontend: ${{ steps.filter.outputs.frontend }}
       backend: ${{ steps.filter.outputs.backend }}
@@ -63,7 +62,7 @@ jobs:
   verify-build-scan-publish:
     name: ${{ matrix.component }} | verify, build, scan, publish
     needs: changes
-    runs-on: ${{ env.RUNNER }}
+    runs-on: ${{ vars.CI_RUNNER || 'ubuntu-24.04' }}
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.changes.outputs.matrix) }}
